@@ -2,6 +2,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
+import { motion, AnimatePresence } from "framer-motion";
+import { CheckCircle2, XCircle } from "lucide-react";
 import type { IDetectedBarcode } from "@yudiel/react-qr-scanner";
 
 const Scanner = dynamic(
@@ -15,97 +17,132 @@ export default function ScannerPage() {
   useEffect(() => {
     const token = sessionStorage.getItem("token");
     if (!token) {
-      router.push("/"); // redirect to login if no token
+      router.push("/");
     }
   }, [router]);
-  const [message, setMessage] = useState<string | null>(null);
-  const [status, setStatus] = useState<"success" | "error" | null>(null);
-  const lastScanRef = useRef<{ code: string; time: number } | null>(null);
+
+  const [status, setStatus] = useState<"loading" | "success" | "error" | null>(null);
+  const [popupMessage, setPopupMessage] = useState<string | null>(null);
+  const [scannerKey, setScannerKey] = useState(0);
+
+  const isScanningRef = useRef(false);
 
   useEffect(() => {
-    if (message) {
+    if (status === "success" || status === "error") {
       const timer = setTimeout(() => {
-        setMessage(null);
+        setPopupMessage(null);
         setStatus(null);
       }, 2500);
       return () => clearTimeout(timer);
     }
-  }, [message]);
+  }, [status]);
 
   const handleScan = (detectedCodes: IDetectedBarcode[]) => {
-  if (detectedCodes.length === 0) return;
+    if (detectedCodes.length === 0) return;
+    const data = detectedCodes[0].rawValue;
+    if (!data) return;
+    if (isScanningRef.current) return;
 
-  const data = detectedCodes[0].rawValue;
-  if (!data) return;
+    isScanningRef.current = true;
+    setStatus("loading");
+    setPopupMessage("Processing...");
 
-  const now = Date.now();
-  if (
-      lastScanRef.current &&
-      lastScanRef.current.code === data &&
-      now - lastScanRef.current.time < 2000
-  ) {
-      return;
-  }
-  lastScanRef.current = { code: data, time: now };
-
-  fetch("/api/scan", {
+    fetch("/api/scan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: data }),
-  })
+    })
       .then(async (res) => {
-      if (!res.ok) {
-          setStatus("error");
-          setMessage(`Server error (${res.status})`);
-          return;
-      }
-      const json = await res.json();
-      if (json.success) {
+        if (!res.ok) throw new Error(`Server error (${res.status})`);
+        const json = await res.json();
+        if (json.success) {
           setStatus("success");
-          setMessage(`Entry ok ✓ Remaining: ${json.remaining}`);
-      } else {
+          setPopupMessage(`Entry OK ✓ Remaining: ${json.remaining}`);
+        } else {
           setStatus("error");
-          setMessage(json.message);
-      }
+          setPopupMessage(json.message);
+        }
       })
-      .catch(() => {
-      setStatus("error");
-      setMessage("Server not reachable");
+      .catch((err) => {
+        setStatus("error");
+        setPopupMessage(err.message || "Server not reachable");
+      })
+      .finally(() => {
+        setTimeout(() => {
+          isScanningRef.current = false;
+          setScannerKey((prev) => prev + 1);
+        }, 1000);
       });
   };
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen bg-[#fafafa] text-gray-800 font-sans">
-      {/* Title */}
-      <h1 className="text-2xl font-semibold mb-2">QR Scanner</h1>
+    <div className="flex flex-col items-center justify-center h-screen bg-gradient-to-br from-pink-100 via-white to-pink-50 text-gray-800 font-sans relative">
+      <h1 className="text-3xl font-bold mb-2">QR Scanner</h1>
       <p className="text-sm text-gray-500 mb-8">Hold a QR code inside the frame</p>
 
-      {/* Picture-style frame */}
-      <div className="p-4 bg-pink-200 rounded-2xl shadow-md border-4 border-pink-300">
-        <div className="w-72 h-72 rounded-lg overflow-hidden bg-white">
+      <div className="p-4 bg-white/80 backdrop-blur-md rounded-2xl shadow-xl border border-pink-200">
+        <div className="w-72 h-72 rounded-lg overflow-hidden bg-gray-50 shadow-inner">
           <Scanner
+            key={scannerKey}
             constraints={{ facingMode: "environment" }}
             onScan={handleScan}
             onError={() => {
               setStatus("error");
-              setMessage("Camera error");
+              setPopupMessage("Camera error");
             }}
           />
         </div>
       </div>
 
-      {/* Toast */}
-      {message && (
-        <div
-          className={`fixed bottom-6 px-4 py-2 rounded-full text-sm shadow-sm ${
-            status === "success"
-              ? "bg-green-100 text-green-700"
-              : "bg-red-100 text-red-700"
-          }`}
-        >
-          {message}
-        </div>
-      )}
+      {/* Overlay + Animations */}
+      <AnimatePresence>
+        {status === "loading" && (
+          <motion.div
+            key="loading"
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <div className="w-64 h-2 bg-gray-300/50 rounded-full overflow-hidden">
+              <motion.div
+                className="h-full w-1/2 bg-gradient-to-r from-pink-400 via-purple-400 to-blue-400"
+                animate={{ x: ["-100%", "100%"] }}
+                transition={{ repeat: Infinity, duration: 1.2 }}
+              />
+            </div>
+            <p className="text-white mt-4 text-lg font-medium">Scanning...</p>
+          </motion.div>
+        )}
+
+        {(status === "success" || status === "error") && popupMessage && (
+          <motion.div
+            key="popup"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className={`p-6 rounded-2xl shadow-2xl max-w-sm text-center flex flex-col items-center gap-3 ${
+                status === "success"
+                  ? "bg-green-50 text-green-700"
+                  : "bg-red-50 text-red-700"
+              }`}
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.8, opacity: 0 }}
+            >
+              {status === "success" ? (
+                <CheckCircle2 className="w-12 h-12 text-green-500" />
+              ) : (
+                <XCircle className="w-12 h-12 text-red-500" />
+              )}
+              <p className="text-lg font-semibold">{popupMessage}</p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
